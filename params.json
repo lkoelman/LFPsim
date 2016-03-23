@@ -1,0 +1,6 @@
+{
+  "name": "LFPsim",
+  "tagline": "Simulation scripts to compute Local Field Potentials (LFP) of cable compartmental models implemented with NEURON",
+  "body": "LFPsim\r\n\r\nSimulation scripts to compute Local Field Potentials (LFP) from cable compartmental models of neurons and networks implemented in NEURON simulation environment.\r\n\r\n\r\nLFPsim works reliably on biophysically detailed multi-compartmental neurons with ion channels in some or all compartments.\r\n\r\n",
+  "note": "Don't delete this file! It's used internally to help with page regeneration."
+}
