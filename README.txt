@@ -16,6 +16,14 @@ NEURON simulation environment.
 LFPsim works reliably on biophysically detailed multi-compartmental
 neurons with ion channels in some or all compartments.
 
+Associated Paper:
+Parasuram H, Nair B, D'Angelo E, Hines M, Naldi G, Diwakar
+S. Computational Modeling of Single Neuron Extracellular Electric
+Potentials and Network Local Field Potentials using LFPsim,
+Front. Comp. Neurosc., June 13, 2016, 10.3389/fncom.2016.00065
+available at
+http://journal.frontiersin.org/article/10.3389/fncom.2016.00065/abstract
+
 Last updated 12-March-2016
 Developed by : Harilal Parasuram & Shyam Diwakar
 Computational Neuroscience & Neurophysiology Lab, School of Biotechnology, Amrita University, India.
