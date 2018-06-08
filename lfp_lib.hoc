@@ -1,0 +1,242 @@
+/*
+
+Library of Hoc functions for working with the LFPsim toolbox.
+
+LFPsim - Simulation scripts to compute Local Field Potentials (LFP) from cable compartmental models of neurons and networks implemented in NEURON simulation environment.
+
+
+CREDITS
+-------
+
+Authors:        Harilal Parasuram & Shyam Diwakar
+Affiliations:   Computational Neuroscience & Neurophysiology Lab, 
+                School of Biotechnology, Amrita University, India.
+Email:          harilalp@am.amrita.edu; shyam@amrita.edu
+Website:        www.amrita.edu/compneuro
+Last updated:   12-March-2016
+
+Modified by:    Lucas Koelman
+Affiliations:   Neuromuscular Systems Lab, University College Dublin, Ireland
+Email:          lucas.koelman@gmail.com
+Last updated:   8-June-2018
+*/
+
+
+/**
+ * Insert mechanism 'extracellular.mod' in all compartments of section list
+ *
+ * TODO: insert accumulator mechanism, pass SectionList
+ *
+ * @param   $s1 : string
+ *          LFP approximation scheme: "PSA", "LSA", or "RC"
+ *
+ * @param   $o2 : SectionList
+ *          SectionList containing sections where mechanisms should be inserted
+ *
+ * PYTHON USAGE
+ * ------------
+ * 
+ * >>> dendritic = h.SectionList()
+ * >>> soma = h.Section()
+ * >>> dendritic.append(sec=soma)
+ * >>> h.insert_lfp_mechanisms("PSA", dendritic)
+ */
+proc insert_lfp_mechanisms() {
+    forsec $o2 {
+
+        insert extracellular
+
+        if (strcmp($s1, "PSA")) {
+            insert lfp_psa
+        }
+        if (strcmp($s1, "LSA")) {
+            insert lfp_lsa
+        }
+        if (strcmp($s1, "RC")) {
+            insert lfp_rc
+        }
+
+    }
+}
+
+/**
+ * Set capacitance, conductance, and axial resistance for extracellular
+ * layers of given sections
+ *
+ * @param   $o1 : SectionList
+ *          SectionList containing sections where extracellular properties
+ *          will be changed.
+ *
+ * @param   $1 : float
+ *          Capacitance of layer 0 (segment.xc[0])
+ *
+ * @param   $2 : float
+ *          Capacitance of layer 1 (segment.xc[1])
+ *
+ * @param   $3 : float
+ *          Conductance of layer 0 (segment.xg[0])
+ *
+ * @param   $4 : float
+ *          Conductance of layer 1 (segment.xg[0])
+ *
+ * @param   $5 : float
+ *          Axial resistance of layer 0 (segment.xraxial[0])
+ *
+ * @param   $6 : float
+ *          Axial resistance of layer 1 (segment.xraxial[1])
+ *
+ */
+proc set_extracellular_properties() {
+    forsec $o1 {
+
+        xc[0] = $2
+        xc[1] = $3
+        
+        xg[0] = $4
+        xg[1] = $5
+
+        xraxial[0] = $6
+        xraxial[1] = $7 
+    }
+}
+
+
+/**
+ * Procedure for computing LFP using three different schemes:
+ *  - Point Source Approximation(PSA)
+ *  - Line Source Approximation (LSA)
+ *  - RC filter methods.
+ *
+ * @param   $o1 : SectionList
+ *          SectionList containing sections where LFP calculation will
+ *          be initialized.
+ *
+ * @param   $2 : sigma
+ *          Conductivity of the extracellular medium.
+ *
+ * @param   $o3 : Vector
+ *          Vector of length 3 containing electrode x,y,z coordinates.
+ *
+ * @effect  In each segment where mechanism 'lfp.mod' was inserted, set the
+ *          scaling factors for the segment's contribution to the total LFP
+ *          according to its 3D coordinates with respect to those of the
+ *          electrode, and the conductivity of the extracellular medium
+ *          'sigma'
+ *
+ * PYTHON USAGE
+ * ------------
+ * 
+ * >>> dendritic = h.SectionList()
+ * >>> soma = h.Section()
+ * >>> dendritic.append(sec=soma)
+ * >>> coords = h.Vector([10.0, 50.0, 20.0])
+ * >>> sigma = 0.3
+ * >>> h.initialize_lfp_factors(dendritic, sigma, coords)
+ */
+proc initialize_lfp_factors(){ local sigma, elec_x, elec_y, elec_z, sigma // TODO: make all local vars
+
+    sigma = $2 // default was 0.3
+    elec_x = $o3.x[0]
+    elec_y = $o3.x[1]
+    elec_z = $o3.x[2]
+
+    forsec $o1 {    
+
+        x = (x3d(0) + x3d(1)) / 2 
+        y = (y3d(0) + y3d(1)) / 2 
+        z = (z3d(0) + z3d(1)) / 2 
+
+        if(elec_x==elec_y==elec_z==0){
+            elec_z=1
+        }
+
+        dis = sqrt( ((elec_x - x)*(elec_x - x)) + ((elec_y - y)*(elec_y - y)) + ((elec_z - z)*(elec_z - z)))
+
+        if(dis<(diam/2)){ // setting radius limit
+            dis = (diam/2) + 0.1
+        }
+        
+
+        if (ismembrane("lfp_psa")) {
+            point_part1 = (1 / (4 * 3.141 * dis * sigma)) * area(0.5)
+
+            for (x, 0) { // center of each segment
+                setpointer transmembrane_current_lfp_psa(x), i_membrane(x)
+                summation_factor_lfp_psa(x) = point_part1   
+            }
+        }
+        if (ismembrane("lfp_rc")) {
+            // RC algorithm implementation
+            capa = 1 // set to specific capacitance, Johnston and Wu 1995
+            RC = sigma * capa
+        
+            time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
+            rc_part1 =  exp(-1 *(time_const/RC)) * area(0.5)
+
+            for (x, 0) { // center of each segment
+                setpointer transmembrane_current_lfp_rc(x), i_membrane(x)
+                summation_factor_lfp_rc(x) = rc_part1   
+            }
+        }
+        if (ismembrane("lfp_lsa")) {
+            //calculate length of the compartment
+            dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
+
+            dist_comp_x = (x3d(1) - x3d(0)) //* 1e-6
+            dist_comp_y = (y3d(1) - y3d(0)) //* 1e-6
+            dist_comp_z = (z3d(1) - z3d(0)) //* 1e-6
+
+            sum_dist_comp = sqrt((dist_comp_x*dist_comp_x) + (dist_comp_y*dist_comp_y) + (dist_comp_z*dist_comp_z))
+
+            //print "sum_dist_comp=",sum_dist_comp, secname(), area(0.5)
+
+            if(sum_dist_comp<(diam/2)){ // setting radius limit
+                        sum_dist_comp = (diam/2) + 0.1
+
+            }
+
+            long_dist_x = (elec_x- x3d(1))
+            long_dist_y = (elec_y- y3d(1))
+            long_dist_z = (elec_z- z3d(1))
+
+            sum_HH = (long_dist_x * dist_comp_x) + (long_dist_y * dist_comp_y) + (long_dist_z * dist_comp_z)
+                    
+            final_sum_HH = sum_HH / sum_dist_comp
+
+            sum_temp1 = (long_dist_x * long_dist_x) + (long_dist_y * long_dist_y) + (long_dist_z * long_dist_z)
+            r_sq = sum_temp1 -(final_sum_HH * final_sum_HH)
+                
+            Length_vector = final_sum_HH + sum_dist_comp
+                                
+
+
+            if ((final_sum_HH<0)&&(Length_vector<=0)){
+
+
+                phi=log((sqrt((final_sum_HH*final_sum_HH) + r_sq) - final_sum_HH)/(sqrt((Length_vector*Length_vector)+r_sq)-Length_vector))
+
+
+            }else if((final_sum_HH>0)&&(Length_vector>0)){
+
+                
+                phi=log((sqrt((Length_vector*Length_vector)+r_sq) + Length_vector)/(sqrt((final_sum_HH*final_sum_HH)+r_sq) + final_sum_HH))
+                
+            }else{
+
+                phi=log(((sqrt((Length_vector*Length_vector)+r_sq)+Length_vector) * (sqrt((final_sum_HH*final_sum_HH)+r_sq)-final_sum_HH))/r_sq)
+                            
+            }
+
+            line_part1 = 1/(4*PI*sum_dist_comp*sigma) * phi * area(0.5)
+ 
+            for (x, 0) { // center of each segment
+                setpointer transmembrane_current_lfp_lsa(x), i_membrane(x)
+                summation_factor_lfp_lsa(x) = line_part1   
+            }
+        } // end if
+    } // end forsec
+
+}
+
+
+// TODO: write accumulator / summation mechanism
