@@ -1,0 +1,66 @@
+/*
+
+Custom init() and advance() functions that record the total LFP signal from
+all cells that have contributing sections (see file 'lfp_lib.hoc').
+
+
+CREDITS
+-------
+
+Authors:        Harilal Parasuram & Shyam Diwakar
+Affiliations:   Computational Neuroscience & Neurophysiology Lab, 
+                School of Biotechnology, Amrita University, India.
+Email:          harilalp@am.amrita.edu; shyam@amrita.edu
+Website:        www.amrita.edu/compneuro
+Last updated:   12-March-2016
+
+Modified by:    Lucas Koelman
+Affiliations:   Neuromuscular Systems Lab, University College Dublin, Ireland
+Email:          lucas.koelman@gmail.com
+Last updated:   8-June-2018
+*/
+
+
+/**
+ * Get total LFP taking into account all contributions from segments
+ * that act as an LFP source.
+ *
+ * @return  float
+ *          Total summed LFP from all contributing sections.
+ */
+func get_total_lfp() { local sum
+    sum = 0
+    forall {
+      if (ismembrane("lfp_src")) {
+        for (x,0) sum += contrib_lfp_src(x)
+      }
+    }
+    return sum
+}
+
+
+/**
+ * If you uncomment this function it will replace the standard init()
+ * function and keep track of the total LFP of all cells with
+ * contributing sections.
+ */
+proc init() {
+    finitialize(v_init)
+    fcurrent()
+    LFP_value = get_total_lfp()
+}
+
+/**
+ * If you uncomment this function it will replace the standard advance()
+ * function and keep track of the total LFP of all cells with
+ * contributing sections.
+ */
+proc advance() {
+    fadvance()
+    LFP_value = get_total_lfp()
+}
+
+//Recording summed LFP using NEURON's record function
+objref LFP_signal
+LFP_signal = new Vector()
+LFP_signal.record(&LFP_value)
