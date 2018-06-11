@@ -43,7 +43,7 @@ Computational Neuroscience & Neurophysiology Lab, School of Biotechnology, Amrit
 Email: harilalp@am.amrita.edu; shyam@amrita.edu
 www.amrita.edu/compneuro 
 
-## How to run LFPsim
+## How to use LFPsim (Graphical version)
 
 1. Copy all LFPsim files and the directory into your NEURON model
 directory downloaded from ModelDB. Copy lfp.mod and mea.mod from

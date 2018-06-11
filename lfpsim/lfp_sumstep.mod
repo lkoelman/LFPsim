@@ -9,10 +9,10 @@ ENDCOMMENT
 
 
 NEURON {
-    POINT_PROCESS LfpSummator
+    POINT_PROCESS LfpSumStep
     POINTER temp_ptr
     POINTER donotuse_sources
-    RANGE sample_period, summed
+    RANGE summed
 }
 
 
@@ -33,13 +33,8 @@ UNITS {
 }
 
 
-PARAMETER {
-    sample_period = 0.05 (ms)
-}
-
 
 ASSIGNED {
-    on
     temp_ptr
     donotuse_sources
     summed (nV)
@@ -80,12 +75,6 @@ ENDVERBATIM
 }
 
 
-INITIAL {
-    on = 0
-    net_send(sample_period, 1)  : turn on and start sampling
-}
-
-
 : Add observed LFP source.
 :
 : PYTHON USAGE
@@ -113,20 +102,16 @@ VERBATIM
     // Allocate node for next call
     current->next = emalloc(sizeof(LfpSource)); // for next call
     current->next->hoc_ref = NULL;
+    current->next->next = NULL;
 
     // fprintf(stderr, "Added ref to group %d\n", group_id);
 ENDVERBATIM
 }
 
 
+: Sum all observed LFP sources and assign to 'summed'
+BREAKPOINT {
 VERBATIM
-/**
- * Sum all observed LFP sources and assign to 'summed'
- *
- * @note    called every sample_period so function call overhead 
- *          might be significant -> inline
- */
-static inline void sum_lfp_sources() {
     LfpSource* current = (LfpSource*)(_p_donotuse_sources);
     summed = 0.0;
     while (current != NULL) {
@@ -136,33 +121,5 @@ static inline void sum_lfp_sources() {
         }
         current = current->next;
     }
-
-}
 ENDVERBATIM
-
-
-NET_RECEIVE (w) {
-
-    if (flag == 0) { : 0 is used for external events
-VERBATIM
-        fprintf(stderr, "Received event with weight %f\n", _args[0]);
-ENDVERBATIM
-    }
-    if (flag == 1) { : message from INITIAL
-        if (on == 0) { : turn on and start sampling
-            on = 1
-VERBATIM
-            sum_lfp_sources();
-ENDVERBATIM
-            net_send(sample_period, 2)
-        } else {
-            on = 0
-        }
-    }
-    if (flag == 2 && on == 1) { : self-message to sample variables
-VERBATIM
-        sum_lfp_sources();
-ENDVERBATIM
-        net_send(sample_period, 2)
-    }
 }

@@ -38,7 +38,7 @@ Last updated:   8-June-2018
 obfunc insert_lfp_summator() { localobj tracker_sec, summator
     tracker_sec = $o1
     tracker_sec {
-        summator = new LfpSummator(0.5)
+        summator = new LfpSumStep(0.5)
     }
     return summator
 }
@@ -76,19 +76,29 @@ obfunc insert_lfp_summator() { localobj tracker_sec, summator
  *    >>> h.add_lfp_sources(summator, "PSA", sigma, electrode_coords, dendritic)
  */
 proc add_lfp_sources(){ \
-    local i, sigma, elec_x, elec_y, elec_z, x, y, z, \
+    local i, sigma, elec_x, elec_y, elec_z, num_3d, \
+          centroid_x, centroid_y, centroid_z, \
           dis, factor, final_factor, capa, RC, time_const, \
           dist_comp, dist_comp_x, dist_comp_y, dist_comp_z, sum_dist_comp, \
           long_dist_x, long_dist_y, long_dist_z, \
           sum_temp1, sum_HH, final_sum_HH, \
           r_sq, phi, Length_vector \
-    localobj summator, sl
+    localobj summator, sl, axis_vec, sec0_vec, sec1_vec, arc_vec, dist_vec, \
+             elec_vec
 
     summator = $o1
     sigma = $3 // default was 0.3
-    elec_x = $o4.x[0]
-    elec_y = $o4.x[1]
-    elec_z = $o4.x[2]
+
+    elec_vec = $o4
+    elec_x = elec_vec.x[0]
+    elec_y = elec_vec.x[1]
+    elec_z = elec_vec.x[2]
+
+    axis_vec = new Vector(3) // vector pointing in direction from start to end of section
+    sec0_vec = new Vector(3) // vector pointing to start of section
+    sec1_vec = new Vector(3) // vector pointing to end of section
+    arc_vec = new Vector(3)  // vector pointing from start of section to center of segment (approximately)
+    // dist_vec = new Vector(3) // vector pointing from electrode to center of segment
 
     if (strcmp($s2, "PSA")!=0 && strcmp($s2, "LSA")!=0 && strcmp($s2, "RC")!=0) {
         execerror("Second argument must be one of PSA, LSA, or RC")
@@ -101,39 +111,64 @@ proc add_lfp_sources(){ \
 
             if (!ismembrane("extracellular")) {
                 insert extracellular
+                // Default setting: extracellular voltage node is insulated from
+                // neighboring compartments and directly connected to ground.
+                // This should behave the same as without extracellular inserted.
+                xraxial = 1e12
+                xg = 1e12
+                xc = 0.0
             }
 
+            num3d = n3d()
 
-            x = (x3d(0) + x3d(1)) / 2 
-            y = (y3d(0) + y3d(1)) / 2 
-            z = (z3d(0) + z3d(1)) / 2 
+            sec0_vec.x[0] = x3d(0)
+            sec0_vec.x[1] = y3d(0)
+            sec0_vec.x[2] = z3d(0)
 
-            if(elec_x==elec_y==elec_z==0){
-                elec_z=1
-            }
+            sec1_vec.x[0] = x3d(num3d-1)
+            sec1_vec.x[1] = y3d(num3d-1)
+            sec1_vec.x[2] = z3d(num3d-1)
 
-            dis = sqrt( ((elec_x - x)*(elec_x - x)) + \
-                        ((elec_y - y)*(elec_y - y)) + \
-                        ((elec_z - z)*(elec_z - z)))
-
-            if(dis<(diam/2)){ // setting radius limit
-                dis = (diam/2) + 0.1
-            }
+            // axis vector = section start - section end
+            axis_vec.copy(sec1_vec)
+            axis_vec.sub(sec0_vec)
             
+            // Compute factor based on LFP approximation scheme
+            if (strcmp($s2, "PSA") == 0 || strcmp($s2, "RC") == 0) {
 
-            // First compute factor without compartment area scaling
-            if (strcmp($s2, "PSA") == 0) {
-                factor = (1 / (4 * 3.141 * dis * sigma))
-            }
-            if (strcmp($s2, "RC") == 0) {
-                // RC algorithm implementation
-                capa = 1 // set to specific capacitance, Johnston and Wu 1995
-                RC = sigma * capa
-            
-                time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
-                factor =  exp(-1 *(time_const/RC))
+                for (x, 0) { // x = center of each segment
+
+                    // arc vector is start of Section + arc length multiplied by axis vector
+                    arc_vec.copy(axis_vec)
+                    arc_vec.mul(x)
+                    arc_vec.add(sec0_vec)
+
+                    // Subtract electrode position and compute vector length
+                    arc_vec.sub(elec_vec)
+                    dis = arc_vec.mag() // 2-norm
+
+                    if (dis < (diam/2)) { // setting radius limit
+                        dis = (diam/2) + 0.1
+                    }
+
+                    if (strcmp($s2, "PSA") == 0) {
+                        factor = (1 / (4 * 3.141 * dis * sigma)) * area(x)
+                    } else {
+                        // RC algorithm implementation
+                        capa = 1 // set to specific capacitance, Johnston and Wu 1995
+                        RC = sigma * capa
+                    
+                        time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
+                        factor =  exp(-1 *(time_const/RC)) * area(x)
+                    }
+                    
+                    setpointer summator.temp_ptr, i_membrane(x)
+                    summator.add_lfp_source(factor)
+                }
             }
             if (strcmp($s2, "LSA") == 0) {
+                // TODO: look up algorithm in paper and see fix based on n3d
+
                 //calculate length of the compartment
                 dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
 
@@ -185,13 +220,13 @@ proc add_lfp_sources(){ \
 
                 factor = 1/(4*PI*sum_dist_comp*sigma) * phi
 
-            } // end if "LSA"
+                for (x, 0) { // center of each segment
+                    setpointer summator.temp_ptr, i_membrane(x)
+                    final_factor = factor * area(x)
+                    summator.add_lfp_source(final_factor)
+                }
 
-            for (x, 0) { // center of each segment
-                setpointer summator.temp_ptr, i_membrane(x)
-                final_factor = factor * area(x)
-                summator.add_lfp_source(final_factor)
-            }
+            } // end if "LSA"
         } // end forsec
     } // end for SectionList
 }
@@ -238,6 +273,44 @@ proc set_extracellular_properties() {
     }
 }
 
+
+/**
+ * Set extracellular properties to default values so that the cable
+ * circuit behaves the same as without the extracelular mechanism inserted.
+ *
+ * @param   $o1 - $oN : SectionList
+ *          SectionLists containing Sections whose properties will be changed.
+ *
+ * NOTES
+ * -----
+ * 
+ * See circuit diagram at 
+ * https://neuron.yale.edu/neuron/static/new_doc/modelspec/programmatic/mechanisms/mech.html#mechanisms
+ * 
+ * If the extracellular voltage node is insulated from neighboring compartments and 
+ * directly connected to ground, it should behave the same as the simplified cable
+ * circuit without extracellular layers.
+ * 
+ * This is achieved by setting the axial resistance ('xraxial') to near-infinite,
+ * the extra layer capacitances to zero, and conductances to near-infinite.
+ */
+proc set_default_extracellular() { \
+    local i \
+    localobj sl
+
+    for i = 1, numarg() {
+        sl = $oi
+        forsec sl {
+
+            if (ismembrane("extracellular")) {
+                xraxial = 1e12
+                xg = 1e12
+                xc = 0.0
+            }
+        }
+    }
+}
+
 //##############################################################################
 // Functions for original LFPsim mechanisms
 //##############################################################################
@@ -249,20 +322,22 @@ proc set_extracellular_properties() {
  * @param   $o1 : SectionList
  *          SectionList containing sections where mechanisms should be inserted
  *
- * PYTHON USAGE
- * ------------
- * 
- *    >>> dendritic = h.SectionList()
- *    >>> soma = h.Section()
- *    >>> dendritic.append(sec=soma)
- *    >>> h.insert_lfp_sources("PSA", dendritic)
  */
-proc insert_lfp_sources() {
-    forsec $o1 {
+proc insert_lfp_sources() { \
+    local i \
+    localobj sl
 
-        insert extracellular
-        insert lfp_src
+    for i = 1, numarg() {
+        sl = $oi
+        forsec sl {
 
+            insert extracellular
+            insert lfp_src
+
+            xraxial = 1e12
+            xg = 1e12
+            xc = 0.0
+        }
     }
 }
 
@@ -271,18 +346,19 @@ proc insert_lfp_sources() {
  * In each segment where mechanism 'lfp_src.mod' was inserted, set the
  * scaling factors for the segment's contribution to the total LFP.
  *
- * @param   $o1 : SectionList
- *          SectionList containing sections where LFP calculation will
- *          be initialized.
  *
- * @param   $s2 : string
+ * @param   $s1 : string
  *          LFP approximation scheme: "PSA", "LSA", or "RC"
  *
- * @param   $3 : sigma
+ * @param   $2 : sigma
  *          Conductivity of the extracellular medium.
  *
- * @param   $o4 : Vector
+ * @param   $o3 : Vector
  *          Vector of length 3 containing electrode x,y,z coordinates.
+ *
+ * @param   $o4 - $oN : SectionList
+ *          SectionLists containing sections whose LFP contributions should
+ *          be summed.
  *
  * @pre     The meachanism "lfp_src" must be inserted in each Section
  *          that you want to contribute to the LFP calculation.
@@ -304,23 +380,26 @@ proc insert_lfp_sources() {
  *    >>> h.initialize_lfp_factors(dendritic, "PSA", sigma, coords)
  */
 proc initialize_lfp_factors(){ \
-    local sigma, elec_x, elec_y, elec_z, x, y, z, \
+    local i, sigma, elec_x, elec_y, elec_z, x, y, z, \
           dis, factor, final_factor, capa, RC, time_const, \
           dist_comp, dist_comp_x, dist_comp_y, dist_comp_z, sum_dist_comp, \
           long_dist_x, long_dist_y, long_dist_z, \
           sum_temp1, sum_HH, final_sum_HH, \
-          r_sq, phi, Length_vector
+          r_sq, phi, Length_vector \
+    localobj sl
 
-    sigma = $3 // default was 0.3
-    elec_x = $o4.x[0]
-    elec_y = $o4.x[1]
-    elec_z = $o4.x[2]
+    sigma = $2 // default was 0.3
+    elec_x = $o3.x[0]
+    elec_y = $o3.x[1]
+    elec_z = $o3.x[2]
 
-    if (strcmp($s2, "PSA")!=0 && strcmp($s2, "LSA")!=0 && strcmp($s2, "RC")!=0) {
+    if (strcmp($s1, "PSA")!=0 && strcmp($s1, "LSA")!=0 && strcmp($s1, "RC")!=0) {
         execerror("Second argument must be one of PSA, LSA, or RC")
     }
 
-    forsec $o1 {
+    for i = 4, numarg() {
+        sl = $oi
+        forsec sl {
 
         if (ismembrane("lfp_src")) {
 
@@ -340,10 +419,10 @@ proc initialize_lfp_factors(){ \
             
 
             // First compute factor without compartment area scaling
-            if (strcmp($s2, "PSA") == 0) {
+            if (strcmp($s1, "PSA") == 0) {
                 factor = (1 / (4 * 3.141 * dis * sigma))
             }
-            if (strcmp($s2, "RC") == 0) {
+            if (strcmp($s1, "RC") == 0) {
                 // RC algorithm implementation
                 capa = 1 // set to specific capacitance, Johnston and Wu 1995
                 RC = sigma * capa
@@ -351,7 +430,7 @@ proc initialize_lfp_factors(){ \
                 time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
                 factor =  exp(-1 *(time_const/RC))
             }
-            if (strcmp($s2, "LSA") == 0) {
+            if (strcmp($s1, "LSA") == 0) {
                 //calculate length of the compartment
                 dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
 
@@ -411,5 +490,6 @@ proc initialize_lfp_factors(){ \
             }
         } // end if ismembrane()
     } // end forsec
+    }
 
 }
