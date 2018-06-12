@@ -44,3 +44,58 @@ neuron.load_mechanisms(here)
 
 neuron.h.load_file(os.path.join(here, 'lfp_lib.hoc'))
 print("\n[LFPsim] Functions in <lfp_lib.hoc> loaded into Hoc")
+
+# Expose some Hoc functions through this module but wrap them so there
+# is documentation
+def insert_lfp_summator(section):
+    """
+    Insert point process that keeps track of the cell's LFP contributions
+    and sums them into one of its variables.
+    
+    @param   $o1 : Section
+             Section where LfpSummator should be inserted
+    
+    """
+    return neuron.h.insert_lfp_summator(section)
+
+
+def add_lfp_sources(*args):
+    """
+    Add all segments in given SectionLists as LFP sources, using the given
+    LFP approximation scheme.
+   
+
+    @param   $o1 : LfpSummator
+             LfpSummator object that will track all the LFP sources
+   
+
+    @param   $s2 : string
+             LFP approximation scheme: "PSA", "LSA", or "RC"
+   
+
+    @param   $3 : sigma
+             Conductivity of the extracellular medium.
+   
+
+    @param   $o4 : Vector
+             Vector of length 3 containing electrode x,y,z coordinates.
+   
+
+    @param   $o5 - $oN : SectionList
+             SectionLists containing sections whose LFP contributions should
+             be summed.
+   
+
+    USAGE
+    -----
+    
+       >>> cell = MyCellTemplate()
+       >>> soma = cell.soma              # Section
+       >>> dendritic = cell.dendritic    # SectionList
+       >>> summator = h.insert_lfp_summator(soma)
+       >>> sigma = 0.3
+       >>> electrode_coords = h.Vector([10.0, 50.0, 20.0])
+       >>> add_lfp_sources(summator, "PSA", sigma, electrode_coords, dendritic)
+    
+    """
+    return neuron.h.add_lfp_sources(*args)

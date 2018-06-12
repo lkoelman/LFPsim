@@ -97,8 +97,7 @@ proc add_lfp_sources(){ \
     axis_vec = new Vector(3) // vector pointing in direction from start to end of section
     sec0_vec = new Vector(3) // vector pointing to start of section
     sec1_vec = new Vector(3) // vector pointing to end of section
-    arc_vec = new Vector(3)  // vector pointing from start of section to center of segment (approximately)
-    // dist_vec = new Vector(3) // vector pointing from electrode to center of segment
+    arc_vec = new Vector(3)  // vector pointing to centroid of segment
 
     if (strcmp($s2, "PSA")!=0 && strcmp($s2, "LSA")!=0 && strcmp($s2, "RC")!=0) {
         execerror("Second argument must be one of PSA, LSA, or RC")
