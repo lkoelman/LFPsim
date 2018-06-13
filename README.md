@@ -3,9 +3,30 @@
 This a modified version of the original LFPsim package by Parasuram et al. 
 (2016) for use with Python and large network simulations.
 
+## Installation
+
+```sh
+git clone https://github.com/lkoelman/LFPsim.git
+cd LFPsim
+
+# Installation via symboling link to download directory:
+python setup.py develop
+python setup.py build_mechs
+```
+
 ## Usage
 
 See examples in file `lfp_lib.hoc`.
+
+```python
+from neuron import h
+h.load_file('my_model.hoc')
+cell = h.MyCellTemplate() # cell ProtoType with SectionLists 'somatic' 'dendritic' etc.
+summator = h.insert_lfp_summator(cell.somatic[0])
+sigma = 0.3
+electrode_coords = h.Vector([10.0, 50.0, 20.0])
+h.add_lfp_sources(summator, "PSA", sigma, electrode_coords, cell.dendritic)
+```
 
 --------------------------------------------------------------------------------
 

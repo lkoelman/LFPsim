@@ -51,18 +51,26 @@ obfunc insert_lfp_summator() { localobj tracker_sec, summator
  * @param   $o1 : LfpSummator
  *          LfpSummator object that will track all the LFP sources
  *
- * @param   $s2 : string
+ * @param   $s2 : bool
+ *          True if CVode.fast_imem should be used and 'extracellular' mechanism
+ *          should not be inserted.
+ *
+ * @param   $s3 : string
  *          LFP approximation scheme: "PSA", "LSA", or "RC"
  *
- * @param   $3 : sigma
+ * @param   $4 : sigma
  *          Conductivity of the extracellular medium.
  *
- * @param   $o4 : Vector
+ * @param   $o5 : Vector
  *          Vector of length 3 containing electrode x,y,z coordinates.
  *
- * @param   $o5 - $oN : SectionList
+ * @param   $o6 - $oN : SectionList
  *          SectionLists containing sections whose LFP contributions should
  *          be summed.
+ *
+ * @pre     If the 'use_fast_imem' argument is True, cvode = h.CVode(); 
+ *          cvode.use_fast_imem(True) must be called before calling this function.
+ *          If not, the variable 'i_membrane_' is not created.
  *
  * PYTHON USAGE
  * ------------
@@ -73,8 +81,9 @@ obfunc insert_lfp_summator() { localobj tracker_sec, summator
  *    >>> summator = h.insert_lfp_summator(soma)
  *    >>> sigma = 0.3
  *    >>> electrode_coords = h.Vector([10.0, 50.0, 20.0])
- *    >>> h.add_lfp_sources(summator, "PSA", sigma, electrode_coords, dendritic)
+ *    >>> h.add_lfp_sources(summator, True, "PSA", sigma, electrode_coords, dendritic)
  */
+strdef _lfp_scheme
 proc add_lfp_sources(){ \
     local i, sigma, elec_x, elec_y, elec_z, num_3d, \
           centroid_x, centroid_y, centroid_z, \
@@ -82,14 +91,16 @@ proc add_lfp_sources(){ \
           dist_comp, dist_comp_x, dist_comp_y, dist_comp_z, sum_dist_comp, \
           long_dist_x, long_dist_y, long_dist_z, \
           sum_temp1, sum_HH, final_sum_HH, \
-          r_sq, phi, Length_vector \
+          r_sq, phi, Length_vector, use_fast_imem \
     localobj summator, sl, axis_vec, sec0_vec, sec1_vec, arc_vec, dist_vec, \
              elec_vec
 
     summator = $o1
-    sigma = $3 // default was 0.3
+    use_fast_imem = $2
+    _lfp_scheme = $s3
+    sigma = $4 // default was 0.3
 
-    elec_vec = $o4
+    elec_vec = $o5
     elec_x = elec_vec.x[0]
     elec_y = elec_vec.x[1]
     elec_z = elec_vec.x[2]
@@ -99,16 +110,19 @@ proc add_lfp_sources(){ \
     sec1_vec = new Vector(3) // vector pointing to end of section
     arc_vec = new Vector(3)  // vector pointing to centroid of segment
 
-    if (strcmp($s2, "PSA")!=0 && strcmp($s2, "LSA")!=0 && strcmp($s2, "RC")!=0) {
+    if (strcmp(_lfp_scheme, "PSA")!=0 && \
+        strcmp(_lfp_scheme, "LSA")!=0 && \
+        strcmp(_lfp_scheme, "RC")!=0) {
+        
         execerror("Second argument must be one of PSA, LSA, or RC")
     }
 
-    for i = 5, numarg() {
+    for i = 6, numarg() {
     
         sl = $oi
         forsec sl {
 
-            if (!ismembrane("extracellular")) {
+            if (!ismembrane("extracellular") && !use_fast_imem) {
                 insert extracellular
                 // Default setting: extracellular voltage node is insulated from
                 // neighboring compartments and directly connected to ground.
@@ -133,7 +147,7 @@ proc add_lfp_sources(){ \
             axis_vec.sub(sec0_vec)
             
             // Compute factor based on LFP approximation scheme
-            if (strcmp($s2, "PSA") == 0 || strcmp($s2, "RC") == 0) {
+            if (strcmp(_lfp_scheme, "PSA") == 0 || strcmp(_lfp_scheme, "RC") == 0) {
 
                 for (x, 0) { // x = center of each segment
 
@@ -150,32 +164,33 @@ proc add_lfp_sources(){ \
                         dis = (diam/2) + 0.1
                     }
 
-                    if (strcmp($s2, "PSA") == 0) {
-                        factor = (1 / (4 * 3.141 * dis * sigma)) * area(x)
+                    if (strcmp(_lfp_scheme, "PSA") == 0) {
+                        factor = (1 / (4 * 3.141 * dis * sigma))
                     } else {
                         // RC algorithm implementation
                         capa = 1 // set to specific capacitance, Johnston and Wu 1995
                         RC = sigma * capa
                     
                         time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
-                        factor =  exp(-1 *(time_const/RC)) * area(x)
+                        factor =  exp(-1 *(time_const/RC))
                     }
-                    
-                    setpointer summator.temp_ptr, i_membrane(x)
-                    summator.add_lfp_source(factor)
                 }
             }
-            if (strcmp($s2, "LSA") == 0) {
+            if (strcmp(_lfp_scheme, "LSA") == 0) {
                 // TODO: look up algorithm in paper and see fix based on n3d
 
                 //calculate length of the compartment
-                dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
+                dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + \
+                                  ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + \
+                                  ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
 
                 dist_comp_x = (x3d(1) - x3d(0)) //* 1e-6
                 dist_comp_y = (y3d(1) - y3d(0)) //* 1e-6
                 dist_comp_z = (z3d(1) - z3d(0)) //* 1e-6
 
-                sum_dist_comp = sqrt((dist_comp_x*dist_comp_x) + (dist_comp_y*dist_comp_y) + (dist_comp_z*dist_comp_z))
+                sum_dist_comp = sqrt( (dist_comp_x*dist_comp_x) + \
+                                      (dist_comp_y*dist_comp_y) + \
+                                      (dist_comp_z*dist_comp_z))
 
 
                 if(sum_dist_comp<(diam/2)){ // setting radius limit
@@ -219,13 +234,21 @@ proc add_lfp_sources(){ \
 
                 factor = 1/(4*PI*sum_dist_comp*sigma) * phi
 
-                for (x, 0) { // center of each segment
+            } // end if "LSA"
+
+            for (x, 0) { // center of each segment
+                if (use_fast_imem) {
+                    // i_membrane_ computed by fast_imem() has dimensions of nA 
+                    // but 'i_membrane' computed in extracellular mechanism
+                    // has units of mA/cm2
+                    setpointer summator.temp_ptr, i_membrane_(x)
+                    final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                } else {
                     setpointer summator.temp_ptr, i_membrane(x)
                     final_factor = factor * area(x)
-                    summator.add_lfp_source(final_factor)
                 }
-
-            } // end if "LSA"
+                summator.add_lfp_source(final_factor)
+            }
         } // end forsec
     } // end for SectionList
 }
