@@ -1,7 +1,7 @@
 # LFPsim for Python
 
 This a modified version of the original LFPsim package by Parasuram et al. 
-(2016) for use with Python and large network simulations.
+(2016) for use with Python and large network simulations using MPI.
 
 ## Installation
 
@@ -21,11 +21,27 @@ See examples in file `lfp_lib.hoc`.
 ```python
 from neuron import h
 h.load_file('my_model.hoc')
-cell = h.MyCellTemplate() # cell ProtoType with SectionLists 'somatic' 'dendritic' etc.
-summator = h.insert_lfp_summator(cell.somatic[0])
+
+cell = h.MyCellTemplate() # Hoc Template or Python object with SectionList attributes 'somatic', 'dendritic' etc.
 sigma = 0.3
 electrode_coords = h.Vector([10.0, 50.0, 20.0])
+summator = h.insert_lfp_summator(cell.somatic[0])
 h.add_lfp_sources(summator, "PSA", sigma, electrode_coords, cell.dendritic)
+
+# Now you can record from summator._ref_summed variable:
+vec = h.Vector()
+rec_dt = 0.05
+vec.record(summator, summator._ref_summed, rec_dt)
+```
+
+For MPI simulations you __must__ use LfpTracker from `lfp_tracker.hoc` and set
+the following options before creating it and running your simulation:
+
+
+```python
+cvode = h.CVode()
+cvode.use_fast_imem(True) # optional, if you don't use mechanism 'extracellular'
+cvode.cache_efficient(True) # necessary, or pointers become invalid
 ```
 
 --------------------------------------------------------------------------------

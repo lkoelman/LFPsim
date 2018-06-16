@@ -43,6 +43,8 @@ here = os.path.abspath(os.path.dirname(__file__))
 neuron.load_mechanisms(here)
 
 neuron.h.load_file(os.path.join(here, 'lfp_lib.hoc'))
+neuron.h.load_file(os.path.join(here, 'lfp_tracker.hoc'))
+
 print("\n[LFPsim] Functions in <lfp_lib.hoc> loaded into Hoc")
 
 # Expose some Hoc functions through this module but wrap them so there

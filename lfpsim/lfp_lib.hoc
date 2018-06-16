@@ -174,6 +174,18 @@ proc add_lfp_sources(){ \
                         time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
                         factor =  exp(-1 *(time_const/RC))
                     }
+
+                    if (use_fast_imem) {
+                        // i_membrane_ computed by fast_imem() has dimensions of nA 
+                        // but 'i_membrane' computed in extracellular mechanism
+                        // has units of mA/cm2
+                        setpointer summator.temp_ptr, i_membrane_(x)
+                        final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                    } else {
+                        setpointer summator.temp_ptr, i_membrane(x)
+                        final_factor = factor * area(x)
+                    }
+                    summator.add_lfp_source(final_factor)
                 }
             }
             if (strcmp(_lfp_scheme, "LSA") == 0) {
@@ -234,23 +246,209 @@ proc add_lfp_sources(){ \
 
                 factor = 1/(4*PI*sum_dist_comp*sigma) * phi
 
+                for (x, 0) { // x = center of each segment
+                    if (use_fast_imem) {
+                        // i_membrane_ computed by fast_imem() has dimensions of nA 
+                        // but 'i_membrane' computed in extracellular mechanism
+                        // has units of mA/cm2
+                        setpointer summator.temp_ptr, i_membrane_(x)
+                        final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                    } else {
+                        setpointer summator.temp_ptr, i_membrane(x)
+                        final_factor = factor * area(x)
+                    }
+                    summator.add_lfp_source(final_factor)
+                } // end for segment
             } // end if "LSA"
-
-            for (x, 0) { // center of each segment
-                if (use_fast_imem) {
-                    // i_membrane_ computed by fast_imem() has dimensions of nA 
-                    // but 'i_membrane' computed in extracellular mechanism
-                    // has units of mA/cm2
-                    setpointer summator.temp_ptr, i_membrane_(x)
-                    final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
-                } else {
-                    setpointer summator.temp_ptr, i_membrane(x)
-                    final_factor = factor * area(x)
-                }
-                summator.add_lfp_source(final_factor)
-            }
         } // end forsec
     } // end for SectionList
+}
+
+
+/**
+ * Calculate multiplication factor for each membrane current according to
+ * the desired LFP approximation scheme.
+ *
+ * @param   $s2 : bool
+ *          True if CVode.fast_imem should be used and 'extracellular' mechanism
+ *          should not be inserted.
+ *
+ * @param   $s3 : string
+ *          LFP approximation scheme: "PSA", "LSA", or "RC"
+ *
+ * @param   $4 : sigma
+ *          Conductivity of the extracellular medium.
+ *
+ * @param   $o5 : Vector
+ *          Vector of length 3 containing electrode x,y,z coordinates.
+ *
+ * @param   $o6 - $oN : SectionList
+ *          SectionLists containing sections whose LFP contributions should
+ *          be summed.
+ *
+ */
+obfunc calc_lfp_factors(){ \
+    local i, sigma, elec_x, elec_y, elec_z, num_3d, \
+          centroid_x, centroid_y, centroid_z, \
+          dis, factor, final_factor, capa, RC, time_const, \
+          dist_comp, dist_comp_x, dist_comp_y, dist_comp_z, sum_dist_comp, \
+          long_dist_x, long_dist_y, long_dist_z, \
+          sum_temp1, sum_HH, final_sum_HH, \
+          r_sq, phi, Length_vector, use_fast_imem \
+    localobj summator, sl, axis_vec, sec0_vec, sec1_vec, arc_vec, dist_vec, \
+             elec_vec, factor_vec
+
+    use_fast_imem = $1
+    _lfp_scheme = $s2
+    sigma = $3 // default was 0.3
+
+    elec_vec = $o4
+    elec_x = elec_vec.x[0]
+    elec_y = elec_vec.x[1]
+    elec_z = elec_vec.x[2]
+
+    axis_vec = new Vector(3) // vector pointing in direction from start to end of section
+    sec0_vec = new Vector(3) // vector pointing to start of section
+    sec1_vec = new Vector(3) // vector pointing to end of section
+    arc_vec = new Vector(3)  // vector pointing to centroid of segment
+
+    if (strcmp(_lfp_scheme, "PSA")!=0 && \
+        strcmp(_lfp_scheme, "LSA")!=0 && \
+        strcmp(_lfp_scheme, "RC")!=0) {
+        
+        execerror("Second argument must be one of PSA, LSA, or RC")
+    }
+
+    // Ordered LFP factors by section list
+    factor_vec = new Vector()
+
+    for i = 5, numarg() {
+    
+        sl = $oi
+        forsec sl {
+
+            num3d = n3d()
+
+            sec0_vec.x[0] = x3d(0)
+            sec0_vec.x[1] = y3d(0)
+            sec0_vec.x[2] = z3d(0)
+
+            sec1_vec.x[0] = x3d(num3d-1)
+            sec1_vec.x[1] = y3d(num3d-1)
+            sec1_vec.x[2] = z3d(num3d-1)
+
+            // axis vector = section start - section end
+            axis_vec.copy(sec1_vec)
+            axis_vec.sub(sec0_vec)
+            
+            // Compute factor based on LFP approximation scheme
+            if (strcmp(_lfp_scheme, "PSA") == 0 || strcmp(_lfp_scheme, "RC") == 0) {
+
+                for (x, 0) { // x = center of each segment
+
+                    // arc vector is start of Section + arc length multiplied by axis vector
+                    arc_vec.copy(axis_vec)
+                    arc_vec.mul(x)
+                    arc_vec.add(sec0_vec)
+
+                    // Subtract electrode position and compute vector length
+                    arc_vec.sub(elec_vec)
+                    dis = arc_vec.mag() // 2-norm
+
+                    if (dis < (diam/2)) { // setting radius limit
+                        dis = (diam/2) + 0.1
+                    }
+
+                    if (strcmp(_lfp_scheme, "PSA") == 0) {
+                        factor = (1 / (4 * 3.141 * dis * sigma))
+                    } else {
+                        // RC algorithm implementation
+                        capa = 1 // set to specific capacitance, Johnston and Wu 1995
+                        RC = sigma * capa
+                    
+                        time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
+                        factor =  exp(-1 *(time_const/RC))
+                    }
+
+                    if (use_fast_imem) {
+                        final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                    } else {
+                        final_factor = factor * area(x)
+                    }
+                    factor_vec.append(final_factor)
+                }
+            }
+            if (strcmp(_lfp_scheme, "LSA") == 0) {
+
+                //calculate length of the compartment
+                dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + \
+                                  ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + \
+                                  ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
+
+                dist_comp_x = (x3d(1) - x3d(0)) //* 1e-6
+                dist_comp_y = (y3d(1) - y3d(0)) //* 1e-6
+                dist_comp_z = (z3d(1) - z3d(0)) //* 1e-6
+
+                sum_dist_comp = sqrt( (dist_comp_x*dist_comp_x) + \
+                                      (dist_comp_y*dist_comp_y) + \
+                                      (dist_comp_z*dist_comp_z))
+
+
+                if(sum_dist_comp<(diam/2)){ // setting radius limit
+                            sum_dist_comp = (diam/2) + 0.1
+
+                }
+
+                long_dist_x = (elec_x- x3d(1))
+                long_dist_y = (elec_y- y3d(1))
+                long_dist_z = (elec_z- z3d(1))
+
+                sum_HH = (long_dist_x * dist_comp_x) + \
+                         (long_dist_y * dist_comp_y) + \
+                         (long_dist_z * dist_comp_z)
+                        
+                final_sum_HH = sum_HH / sum_dist_comp
+
+                sum_temp1 = (long_dist_x * long_dist_x) + \
+                            (long_dist_y * long_dist_y) + \
+                            (long_dist_z * long_dist_z)
+                
+                r_sq = sum_temp1 -(final_sum_HH * final_sum_HH)
+                    
+                Length_vector = final_sum_HH + sum_dist_comp
+
+                if ((final_sum_HH<0)&&(Length_vector<=0)){
+
+                    phi = log((sqrt((final_sum_HH*final_sum_HH) + r_sq) - final_sum_HH)/(sqrt((Length_vector*Length_vector)+r_sq)-Length_vector))
+
+
+                }else if((final_sum_HH>0)&&(Length_vector>0)){
+
+                    
+                    phi = log((sqrt((Length_vector*Length_vector)+r_sq) + Length_vector)/(sqrt((final_sum_HH*final_sum_HH)+r_sq) + final_sum_HH))
+                    
+                }else{
+
+                    phi =log(((sqrt((Length_vector*Length_vector)+r_sq)+Length_vector) * (sqrt((final_sum_HH*final_sum_HH)+r_sq)-final_sum_HH))/r_sq)
+                                
+                }
+
+                factor = 1/(4*PI*sum_dist_comp*sigma) * phi
+
+                for (x, 0) {
+                    if (use_fast_imem) {
+                        final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                    } else {
+                        final_factor = factor * area(x)
+                    }
+                    factor_vec.append(final_factor)
+                }
+            } // end if "LSA"
+
+        } // end forsec
+    } // end for SectionList
+
+    return factor_vec
 }
 
 
@@ -382,7 +580,7 @@ proc insert_lfp_sources() { \
  *          SectionLists containing sections whose LFP contributions should
  *          be summed.
  *
- * @pre     The meachanism "lfp_src" must be inserted in each Section
+ * @pre     The mechanism "lfp_src" must be inserted in each Section
  *          that you want to contribute to the LFP calculation.
  *
  * @effect  In each segment where mechanism 'lfp_src.mod' was inserted, set the

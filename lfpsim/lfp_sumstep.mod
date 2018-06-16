@@ -109,7 +109,27 @@ ENDVERBATIM
 }
 
 
+FUNCTION update_imemb_ptr(index) {
+VERBATIM
+    
+    LfpSource* current = (LfpSource*)(_p_donotuse_sources);
+    unsigned int current_index = 0;
+    while (current_index < _lindex) {
+        current = current->next;
+        ++current_index;
+    }
+    if (current == NULL) {
+        hoc_execerror("Index too high: no pointer at index", 0);
+    }
+    current->hoc_ref = _p_temp_ptr;
+
+ENDVERBATIM
+}
+
+
 : Sum all observed LFP sources and assign to 'summed'
+: NOTE: AFTER SOLVE is called multiple times per step -> leads to 42% increase
+:       in simulation time in test
 BREAKPOINT {
 VERBATIM
     LfpSource* current = (LfpSource*)(_p_donotuse_sources);

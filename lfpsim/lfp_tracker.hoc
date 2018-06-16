@@ -1,0 +1,316 @@
+/*
+
+LFP tracker class to keep track of a cell's LFP contributions.
+
+
+CREDITS
+-------
+
+Author:         Lucas Koelman
+Affiliations:   Neuromuscular Systems Lab, University College Dublin, Ireland
+Email:          lucas.koelman@gmail.com
+Last updated:   8-June-2018
+*/
+
+
+begintemplate LfpTracker
+
+// List public member variables & functions
+public summator, update_imemb_ptrs
+
+// External names that will be used within the template
+// external add_lfp_sources
+
+// Member variables
+objref this, summator, imemb_ptrs, tracked_seclists
+strdef _lfp_scheme
+use_fast_imem = 1
+
+/**
+ * Add all segments in given SectionLists as LFP sources, using the given
+ * LFP approximation scheme
+ *
+ * ARGUMENTS
+ * ---------
+ *
+ * @param   $o1 : tracking_section <Section>
+ *          Section where LFP summator object should be inserted.
+ *          This has no influence on the section and is only necessary
+ *          because a POINT_PROCESS object needs a container.
+ *
+ * @param   $s2 : use_fast_imem <bool>
+ *          True if CVode.fast_imem should be used and 'extracellular' mechanism
+ *          should not be inserted.
+ *
+ * @param   $s3 : lfp_scheme <string>
+ *          LFP approximation scheme: "PSA", "LSA", or "RC"
+ *
+ * @param   $4 : sigma <float>
+ *          Conductivity of the extracellular medium.
+ *
+ * @param   $o5 : electrode_coords <Vector>
+ *          Vector of length 3 containing electrode x,y,z coordinates.
+ *
+ * @param   $o6 - $oN : tracked_seclist <SectionList>
+ *          SectionLists containing sections whose LFP contributions should
+ *          be summed.
+ *
+ * PRE & POST CONDITIONS
+ * ---------------------
+ *
+ * @pre     If the 'use_fast_imem' argument is True, cvode = h.CVode(); 
+ *          cvode.use_fast_imem(True) must be called before calling this function.
+ *          If not, the variable 'i_membrane_' is not created.
+ *
+ * PYTHON USAGE
+ * ------------
+ * 
+ *    >>> cell = MyCellTemplate()
+ *    >>> soma = cell.soma              # Section
+ *    >>> dendritic = cell.dendritic    # SectionList
+ *    >>> sigma = 0.3
+ *    >>> electrode_coords = h.Vector([10.0, 50.0, 20.0])
+ *    >>> tracker = h.LfpTracker(soma, True, "PSA", sigma, electrode_coords, dendritic)
+ */
+proc init() { \
+    local i, sigma, elec_x, elec_y, elec_z, num_3d, \
+          centroid_x, centroid_y, centroid_z, \
+          dis, factor, final_factor, capa, RC, time_const, \
+          dist_comp, dist_comp_x, dist_comp_y, dist_comp_z, sum_dist_comp, \
+          long_dist_x, long_dist_y, long_dist_z, sum_temp1, sum_HH, final_sum_HH, \
+          r_sq, phi, Length_vector, num_tracked_segs, i_seg \
+    localobj tracker_sec, sl, axis_vec, sec0_vec, sec1_vec, arc_vec, dist_vec, elec_vec
+
+    // Insert LFP summator that will sum compartment's LFP contributions
+    tracker_sec = $o1
+    tracker_sec {
+        summator = new LfpSumStep(0.5)
+    }
+
+    tracked_seclists = new List()
+
+    // Pointer vector to keep track of each compartment's transmembrane current
+    num_tracked_segs = 0
+    for i = 6, numarg() {
+        sl = $oi
+        tracked_seclists.append(sl)
+        forsec sl {
+            num_tracked_segs += nseg
+        }
+    }
+    imemb_ptrs = new PtrVector(num_tracked_segs)
+
+
+    // Tell summator which sections and compartments to track
+    use_fast_imem = $2
+    _lfp_scheme = $s3
+    sigma = $4 // default was 0.3
+
+    elec_vec = $o5
+    elec_x = elec_vec.x[0]
+    elec_y = elec_vec.x[1]
+    elec_z = elec_vec.x[2]
+
+    axis_vec = new Vector(3) // vector pointing in direction from start to end of section
+    sec0_vec = new Vector(3) // vector pointing to start of section
+    sec1_vec = new Vector(3) // vector pointing to end of section
+    arc_vec = new Vector(3)  // vector pointing to centroid of segment
+
+    if (strcmp(_lfp_scheme, "PSA")!=0 && \
+        strcmp(_lfp_scheme, "LSA")!=0 && \
+        strcmp(_lfp_scheme, "RC")!=0) {
+        execerror("Second argument must be one of PSA, LSA, or RC")
+    }
+
+
+    i_seg = 0
+    for i = 0, tracked_seclists.count()-1 {
+        sl = tracked_seclists.o(i)
+        forsec sl {
+
+            if (!ismembrane("extracellular") && !use_fast_imem) {
+                insert extracellular
+                // Default setting: extracellular voltage node is insulated from
+                // neighboring compartments and directly connected to ground.
+                // This should behave the same as without extracellular inserted.
+                xraxial = 1e12
+                xg = 1e12
+                xc = 0.0
+            }
+
+            num3d = n3d()
+
+            sec0_vec.x[0] = x3d(0)
+            sec0_vec.x[1] = y3d(0)
+            sec0_vec.x[2] = z3d(0)
+
+            sec1_vec.x[0] = x3d(num3d-1)
+            sec1_vec.x[1] = y3d(num3d-1)
+            sec1_vec.x[2] = z3d(num3d-1)
+
+            // axis vector = section start - section end
+            axis_vec.copy(sec1_vec)
+            axis_vec.sub(sec0_vec)
+            
+            // Compute factor based on LFP approximation scheme
+            if (strcmp(_lfp_scheme, "PSA") == 0 || strcmp(_lfp_scheme, "RC") == 0) {
+
+                for (x, 0) { // x = center of each segment
+
+
+                    // arc vector is start of Section + arc length multiplied by axis vector
+                    arc_vec.copy(axis_vec)
+                    arc_vec.mul(x)
+                    arc_vec.add(sec0_vec)
+
+                    // Subtract electrode position and compute vector length
+                    arc_vec.sub(elec_vec)
+                    dis = arc_vec.mag() // 2-norm
+
+                    if (dis < (diam/2)) { // setting radius limit
+                        dis = (diam/2) + 0.1
+                    }
+
+                    if (strcmp(_lfp_scheme, "PSA") == 0) {
+                        factor = (1 / (4 * 3.141 * dis * sigma))
+                    } else {
+                        // RC algorithm implementation
+                        capa = 1 // set to specific capacitance, Johnston and Wu 1995
+                        RC = sigma * capa
+                    
+                        time_const = dis / 240 // velo um/ms  // Nauhaus et al, 2009 calculated the propagation speed on average, 0.24 ± 0.20 m/s in monkeys and 0.31 ± 0.23 m/s in cats (mean ± s.d.) ie, 240 um/ms
+                        factor =  exp(-1 *(time_const/RC))
+                    }
+
+                    if (use_fast_imem) {
+                        // i_membrane_ computed by fast_imem() has dimensions of nA 
+                        // but 'i_membrane' computed in extracellular mechanism
+                        // has units of mA/cm2
+                        setpointer summator.temp_ptr, i_membrane_(x)
+                        imemb_ptrs.pset(i_seg, &i_membrane_(x))
+                        final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                    } else {
+                        setpointer summator.temp_ptr, i_membrane(x)
+                        imemb_ptrs.pset(i_seg, &i_membrane(x))
+                        final_factor = factor * area(x)
+                    }
+                    summator.add_lfp_source(final_factor)
+                    i_seg += 1
+                } // end for segment
+            }
+            if (strcmp(_lfp_scheme, "LSA") == 0) {
+                // TODO: look up algorithm in paper and see fix based on n3d
+
+                //calculate length of the compartment
+                dist_comp = sqrt( ((x3d(1) - x3d(0))*(x3d(1) - x3d(0))) + \
+                                  ((y3d(1) - y3d(0))*(y3d(1) - y3d(0))) + \
+                                  ((z3d(1) - z3d(0))*(z3d(1) - z3d(0))))
+
+                dist_comp_x = (x3d(1) - x3d(0)) //* 1e-6
+                dist_comp_y = (y3d(1) - y3d(0)) //* 1e-6
+                dist_comp_z = (z3d(1) - z3d(0)) //* 1e-6
+
+                sum_dist_comp = sqrt( (dist_comp_x*dist_comp_x) + \
+                                      (dist_comp_y*dist_comp_y) + \
+                                      (dist_comp_z*dist_comp_z))
+
+
+                if(sum_dist_comp<(diam/2)){ // setting radius limit
+                            sum_dist_comp = (diam/2) + 0.1
+
+                }
+
+                long_dist_x = (elec_x- x3d(1))
+                long_dist_y = (elec_y- y3d(1))
+                long_dist_z = (elec_z- z3d(1))
+
+                sum_HH = (long_dist_x * dist_comp_x) + \
+                         (long_dist_y * dist_comp_y) + \
+                         (long_dist_z * dist_comp_z)
+                        
+                final_sum_HH = sum_HH / sum_dist_comp
+
+                sum_temp1 = (long_dist_x * long_dist_x) + \
+                            (long_dist_y * long_dist_y) + \
+                            (long_dist_z * long_dist_z)
+                
+                r_sq = sum_temp1 -(final_sum_HH * final_sum_HH)
+                    
+                Length_vector = final_sum_HH + sum_dist_comp
+
+                if ((final_sum_HH<0)&&(Length_vector<=0)){
+
+                    phi = log((sqrt((final_sum_HH*final_sum_HH) + r_sq) - final_sum_HH)/(sqrt((Length_vector*Length_vector)+r_sq)-Length_vector))
+
+
+                }else if((final_sum_HH>0)&&(Length_vector>0)){
+
+                    
+                    phi = log((sqrt((Length_vector*Length_vector)+r_sq) + Length_vector)/(sqrt((final_sum_HH*final_sum_HH)+r_sq) + final_sum_HH))
+                    
+                }else{
+
+                    phi =log(((sqrt((Length_vector*Length_vector)+r_sq)+Length_vector) * (sqrt((final_sum_HH*final_sum_HH)+r_sq)-final_sum_HH))/r_sq)
+                                
+                }
+
+                factor = 1/(4*PI*sum_dist_comp*sigma) * phi
+
+                for (x, 0) { // x = center of each segment
+                    if (use_fast_imem) {
+                        // i_membrane_ computed by fast_imem() has dimensions of nA 
+                        // but 'i_membrane' computed in extracellular mechanism
+                        // has units of mA/cm2
+                        setpointer summator.temp_ptr, i_membrane_(x)
+                        imemb_ptrs.pset(i_seg, &i_membrane_(x))
+                        final_factor = factor * 1e2 // [nA == 1e-9A] to [mA/cm2*um2 == 1e-11A]
+                    } else {
+                        setpointer summator.temp_ptr, i_membrane(x)
+                        imemb_ptrs.pset(i_seg, &i_membrane(x))
+                        final_factor = factor * area(x)
+                    }
+                    summator.add_lfp_source(final_factor)
+                    i_seg += 1
+                } // end for segment
+
+            } // end if "LSA"
+
+            // Ask Hoc to notify us whenever i_membrane range variables have changed
+            // so we can update the pointers.
+            imemb_ptrs.ptr_update_callback("update_imemb_ptrs()", this)
+
+        } // end forsec
+    } // end for SectionList
+}
+
+
+/**
+ * Callback function for when i_membrane range variables have changed.
+ * Re-establish pointers to each compartment's transmembrane current.
+ */
+proc update_imemb_ptrs() { local i_seg localobj sl
+    i_seg = 0
+    for i = 0, tracked_seclists.count()-1 {
+        sl = tracked_seclists.o(i)
+        forsec sl {
+            for (x, 0) { 
+                if (use_fast_imem) {
+                    setpointer summator.temp_ptr, i_membrane_(x)
+                    // Statement below does not seem to be necessary.
+                    // It makes sense that pointers are automatically updates,
+                    // and that the callback lets you do related actions.
+                    // imemb_ptrs.pset(i_seg, &i_membrane_(x))
+                } else {
+                    setpointer summator.temp_ptr, i_membrane(x)
+                    // imemb_ptrs.pset(i_seg, &i_membrane(x))
+                }
+                summator.update_imemb_ptr(i_seg)
+                i_seg += 1
+            }
+        }
+        print "Updated i_memb pointers for sectionlist ", sl
+    }
+}
+
+
+endtemplate LfpTracker
