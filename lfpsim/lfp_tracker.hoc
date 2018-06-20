@@ -12,6 +12,8 @@ Email:          lucas.koelman@gmail.com
 Last updated:   8-June-2018
 */
 
+// Set to higher level to increase verbosity
+LFPSIM_VERBOSITY = 0
 
 begintemplate LfpTracker
 
@@ -19,7 +21,7 @@ begintemplate LfpTracker
 public summator, update_imemb_ptrs
 
 // External names that will be used within the template
-// external add_lfp_sources
+external LFPSIM_VERBOSITY
 
 // Member variables
 objref this, summator, imemb_ptrs, tracked_seclists
@@ -280,6 +282,9 @@ proc init() { \
             imemb_ptrs.ptr_update_callback("update_imemb_ptrs()", this)
 
         } // end forsec
+        if (LFPSIM_VERBOSITY > 0) {
+            print "Tracking LFP for SectionList: ", sl
+        }
     } // end for SectionList
 }
 
@@ -308,7 +313,9 @@ proc update_imemb_ptrs() { local i_seg localobj sl
                 i_seg += 1
             }
         }
-        print "Updated i_memb pointers for sectionlist ", sl
+        if (LFPSIM_VERBOSITY > 0) {
+            print "Updated i_memb pointers for sectionlist ", sl
+        }
     }
 }
 
